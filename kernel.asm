@@ -1,12 +1,14 @@
 [BITS 32]                    ; Protected mode (32-bit)
 [ORG 0x1000]                 ; Kernel loaded at 0x1000
 
-; Lightweight GUI OS with VGA Graphics (800x600)
+; Lightweight GUI OS with VGA Graphics (800x600) + WiFi Support
 kernel_start:
     mov esp, 0x90000         ; Set up kernel stack
     call setup_gdt
     call enable_graphics_mode
     call init_mouse
+    call init_keyboard
+    call wifi_init            ; Initialize WiFi module
     call draw_desktop
     call main_loop
     jmp $
@@ -17,6 +19,22 @@ SCREEN_WIDTH equ 800
 SCREEN_HEIGHT equ 600
 BYTES_PER_PIXEL equ 1
 SCREEN_MEMORY equ 0xA0000
+
+; WiFi Port Constants
+WIFI_PORT_DATA equ 0x1000
+WIFI_PORT_CMD equ 0x1001
+WIFI_PORT_STATUS equ 0x1002
+
+; WiFi Status Constants
+WIFI_STATUS_READY equ 0x01
+WIFI_STATUS_CONNECTING equ 0x03
+WIFI_STATUS_CONNECTED equ 0x04
+
+; WiFi State Variables
+wifi_status db 0x00
+wifi_connected db 0x00
+wifi_ssid db "MinimalOS_Network", 0
+wifi_signal_strength db 0x00
 
 ; Setup GDT
 setup_gdt:
@@ -74,6 +92,16 @@ init_mouse:
     pop eax
     ret
 
+; Initialize keyboard
+init_keyboard:
+    push eax
+    
+    ; Keyboard already initialized by BIOS
+    ; Just enable interrupt handling here
+    
+    pop eax
+    ret
+
 ; Wait for keyboard controller
 wait_kbd:
     push eax
@@ -83,6 +111,113 @@ wait_kbd:
     test al, 0x02
     jnz .wait_loop
     
+    pop eax
+    ret
+
+; Initialize WiFi Module
+wifi_init:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    
+    ; Send initialization command to WiFi hardware
+    mov al, 0x01             ; WIFI_CMD_INIT
+    out WIFI_PORT_CMD, al
+    
+    ; Wait for response
+    call wifi_wait_response
+    
+    ; Set initial status
+    mov byte [wifi_status], WIFI_STATUS_READY
+    mov byte [wifi_connected], 0x00
+    
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; WiFi: Connect to network
+wifi_connect_to_network:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    
+    ; Update status
+    mov byte [wifi_status], WIFI_STATUS_CONNECTING
+    
+    ; Send connect command
+    mov al, 0x03             ; WIFI_CMD_CONNECT
+    out WIFI_PORT_CMD, al
+    
+    ; Send SSID
+    mov al, 18               ; SSID length
+    out WIFI_PORT_DATA, al
+    
+    mov esi, wifi_ssid
+    mov ecx, 18
+    
+.send_ssid:
+    mov al, byte [esi]
+    out WIFI_PORT_DATA, al
+    inc esi
+    loop .send_ssid
+    
+    ; Wait for connection
+    mov ecx, 0x100000
+    
+.connect_wait:
+    in al, WIFI_PORT_STATUS
+    cmp al, WIFI_STATUS_CONNECTED
+    je .connect_success
+    
+    loop .connect_wait
+    
+.connect_success:
+    mov byte [wifi_status], WIFI_STATUS_CONNECTED
+    mov byte [wifi_connected], 0x01
+    
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; WiFi: Get signal strength
+wifi_get_signal:
+    push ebx
+    push ecx
+    push edx
+    
+    mov al, 0x07             ; Signal strength command
+    out WIFI_PORT_CMD, al
+    
+    in al, WIFI_PORT_DATA
+    mov byte [wifi_signal_strength], al
+    
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+; WiFi: Wait for response
+wifi_wait_response:
+    push eax
+    push ecx
+    
+    mov ecx, 0x10000
+    
+.wait_loop:
+    in al, WIFI_PORT_STATUS
+    cmp al, 0x00
+    je .wait_done
+    
+    loop .wait_loop
+    
+.wait_done:
+    pop ecx
     pop eax
     ret
 
@@ -107,6 +242,9 @@ draw_desktop:
     ; Draw desktop icons
     call draw_icons
     
+    ; Draw WiFi status indicator
+    call draw_wifi_indicator
+    
     pop edi
     pop esi
     pop edx
@@ -127,7 +265,6 @@ fill_background:
     mov ecx, SCREEN_WIDTH * SCREEN_HEIGHT / 4
     
 .fill_loop:
-    ; Top portion - light blue to dark blue gradient
     mov eax, 0x02020202      ; Blue pixels
     mov dword [edi], eax
     add edi, 4
@@ -135,7 +272,6 @@ fill_background:
     cmp edi, SCREEN_MEMORY + (SCREEN_WIDTH * 300)
     jl .fill_loop
     
-    ; Bottom portion - darker blue
 .fill_bottom:
     mov eax, 0x01010101      ; Darker blue
     mov dword [edi], eax
@@ -240,12 +376,12 @@ draw_rect_outline:
     
     ; Top line
     mov edi, SCREEN_MEMORY
-    add edi, ecx             ; y offset
+    add edi, ecx
     mov ecx, SCREEN_WIDTH
-    imul ecx, ebx            ; x offset to add
+    imul ecx, ebx
     add edi, ecx
     
-    mov ecx, edx             ; width
+    mov ecx, edx
 .top_line:
     mov byte [edi], al
     inc edi
@@ -253,12 +389,12 @@ draw_rect_outline:
     
     ; Bottom line
     mov edi, SCREEN_MEMORY
-    mov ecx, ebx             ; y = start_y + height
+    mov ecx, ebx
     add ecx, esi
     mov eax, SCREEN_WIDTH
     imul eax, ecx
     add edi, eax
-    add edi, ebx             ; x offset
+    add edi, ebx
     
     mov ecx, edx
 .bottom_line:
@@ -267,17 +403,17 @@ draw_rect_outline:
     loop .bottom_line
     
     ; Left and right lines
-    mov ecx, esi             ; height
+    mov ecx, esi
     
 .vertical_loop:
     ; Left line
     mov edi, SCREEN_MEMORY
     mov eax, ecx
-    add eax, ebx             ; y offset
+    add eax, ebx
     mov edx, SCREEN_WIDTH
     imul edx, eax
     add edi, edx
-    add edi, ebx             ; x offset
+    add edi, ebx
     mov byte [edi], al
     
     ; Right line
@@ -286,7 +422,7 @@ draw_rect_outline:
     imul edx, eax
     add edi, edx
     add edi, ebx
-    add edi, 700             ; x offset + width
+    add edi, 700
     mov byte [edi], al
     
     loop .vertical_loop
@@ -318,6 +454,57 @@ draw_icons:
     mov esi, icon_data2
     call draw_icon
     
+    ; Draw WiFi icon at position (220, 20)
+    mov edi, SCREEN_MEMORY + (20 * SCREEN_WIDTH) + 220
+    mov esi, wifi_icon
+    call draw_icon
+    
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Draw WiFi status indicator
+draw_wifi_indicator:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    
+    ; Draw WiFi status in top-right corner
+    mov edi, SCREEN_MEMORY + (10 * SCREEN_WIDTH) + 700
+    
+    ; Check if WiFi is connected
+    cmp byte [wifi_connected], 0x01
+    jne .wifi_disconnected
+    
+    ; Draw connected indicator (green)
+    mov al, 0x02             ; Green
+    mov ecx, 50
+    
+.wifi_connected_bar:
+    mov byte [edi], al
+    inc edi
+    loop .wifi_connected_bar
+    
+    jmp .wifi_done
+    
+.wifi_disconnected:
+    ; Draw disconnected indicator (red)
+    mov al, 0x04             ; Red
+    mov ecx, 50
+    
+.wifi_disconnected_bar:
+    mov byte [edi], al
+    inc edi
+    loop .wifi_disconnected_bar
+    
+.wifi_done:
     pop edi
     pop esi
     pop edx
@@ -335,8 +522,8 @@ draw_icon:
     push esi
     push edi
     
-    mov ecx, 16              ; height
-    mov edx, 16              ; width
+    mov ecx, 16
+    mov edx, 16
     
 .icon_row:
     mov ebx, edx
@@ -353,7 +540,6 @@ draw_icon:
     dec ebx
     jnz .icon_col
     
-    ; Move to next row
     add edi, (SCREEN_WIDTH - 16)
     
     loop .icon_row
@@ -373,14 +559,13 @@ draw_text_white:
     push ecx
     push edi
     
-    mov al, 0x0F             ; White
+    mov al, 0x0F
     
 .text_loop:
     mov bl, byte [esi]
     cmp bl, 0
     je .text_done
     
-    ; Simple character rendering - use character code as pixel pattern
     mov byte [edi], al
     inc edi
     inc esi
@@ -408,6 +593,9 @@ main_loop:
     ; Check keyboard
     call check_keyboard
     
+    ; Update WiFi status periodically
+    call wifi_get_signal
+    
     jmp main_loop
     
     pop edi
@@ -425,12 +613,7 @@ check_mouse:
     push ecx
     push edx
     
-    ; Read mouse data from port 0x60
-    mov al, 0x60
     in al, 0x60
-    
-    ; Store mouse position (simplified)
-    ; In real implementation would parse mouse packets
     
     pop edx
     pop ecx
@@ -442,12 +625,18 @@ check_mouse:
 check_keyboard:
     push eax
     
-    ; Read from keyboard port
     in al, 0x60
     
-    ; ESC key = exit
     cmp al, 0x01
     je .exit
+    
+    ; W key = connect WiFi
+    cmp al, 0x11
+    je .connect_wifi
+    
+    ; D key = disconnect WiFi
+    cmp al, 0x20
+    je .disconnect_wifi
     
 .keyboard_done:
     pop eax
@@ -455,9 +644,17 @@ check_keyboard:
     
 .exit:
     jmp kernel_start
+    
+.connect_wifi:
+    call wifi_connect_to_network
+    jmp .keyboard_done
+    
+.disconnect_wifi:
+    mov byte [wifi_connected], 0x00
+    jmp .keyboard_done
 
 ; String data
-window_title db "MinimalOS GUI - 800x600", 0
+window_title db "MinimalOS GUI + WiFi Support v1.0", 0
 
 ; Icon data (simple 16x16 patterns)
 icon_data:
@@ -496,6 +693,25 @@ icon_data2:
     db "                  "
     db "                  "
 
+; WiFi icon (signal bars)
+wifi_icon:
+    db "          CCCCCC "
+    db "        CC    CC "
+    db "      CC  CCCC  "
+    db "    CC  CC    CC "
+    db "  CC  CC  CCCC   "
+    db " CC CC CC    CC  "
+    db "CC CC  CC  CCCC  "
+    db "CCCCCC CCCCCC    "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+
 ; Global Descriptor Table
 gdt:
     dq 0x0000000000000000
@@ -506,7 +722,7 @@ gdt_descriptor:
     dw $ - gdt - 1
     dd gdt
 
-; Mouse state (simplified)
+; Mouse state
 mouse_x dd 400
 mouse_y dd 300
 mouse_buttons db 0
