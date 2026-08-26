@@ -1,42 +1,93 @@
 [BITS 32]                    ; Protected mode (32-bit)
 [ORG 0x1000]                 ; Kernel loaded at 0x1000
 
-; ASCII Art Graphics Browser Kernel
+; Lightweight GUI OS with VGA Graphics (800x600)
 kernel_start:
     mov esp, 0x90000         ; Set up kernel stack
     call setup_gdt
-    call clear_screen
-    call draw_browser_frame
-    call draw_content
-    jmp $                    ; Infinite loop
+    call enable_graphics_mode
+    call init_mouse
+    call draw_desktop
+    call main_loop
+    jmp $
 
-; VGA text buffer constants
-VIDEO_MEMORY equ 0xB8000
-VIDEO_WIDTH equ 80
-VIDEO_HEIGHT equ 25
+; Constants
+VIDEO_MODE_VGA equ 0x103    ; 800x600x256 VESA mode
+SCREEN_WIDTH equ 800
+SCREEN_HEIGHT equ 600
+BYTES_PER_PIXEL equ 1
+SCREEN_MEMORY equ 0xA0000
 
-; Clear screen
-clear_screen:
+; Setup GDT
+setup_gdt:
     push eax
-    push ecx
-    push edi
-    
-    mov edi, VIDEO_MEMORY
-    mov ecx, VIDEO_WIDTH * VIDEO_HEIGHT
-    mov ax, 0x0F00           ; White space on black
-    
-.clear_loop:
-    mov word [edi], ax
-    add edi, 2
-    loop .clear_loop
-    
-    pop edi
-    pop ecx
+    lgdt [gdt_descriptor]
+    mov eax, cr0
+    or eax, 0x01
+    mov cr0, eax
     pop eax
     ret
 
-; Draw complete browser frame
-draw_browser_frame:
+; Enable VGA Graphics Mode (800x600x256)
+enable_graphics_mode:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    
+    ; Set VGA mode to 800x600x256 using INT 0x10
+    mov ax, 0x4F02           ; VESA set mode
+    mov bx, 0x103            ; 800x600x256
+    int 0x10
+    
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Initialize mouse (PS/2)
+init_mouse:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    
+    ; Enable auxiliary device (mouse)
+    mov al, 0xA8
+    out 0x64, al
+    call wait_kbd
+    
+    ; Set defaults
+    mov al, 0xF6
+    out 0x60, al
+    call wait_kbd
+    
+    ; Enable data reporting
+    mov al, 0xF4
+    out 0x60, al
+    call wait_kbd
+    
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Wait for keyboard controller
+wait_kbd:
+    push eax
+    
+.wait_loop:
+    in al, 0x64
+    test al, 0x02
+    jnz .wait_loop
+    
+    pop eax
+    ret
+
+; Draw desktop background and UI
+draw_desktop:
     push eax
     push ebx
     push ecx
@@ -44,29 +95,17 @@ draw_browser_frame:
     push esi
     push edi
     
-    ; Row 0: Top decorative border
-    call draw_top_decoration
+    ; Fill screen with blue gradient background
+    call fill_background
     
-    ; Row 1: Browser header with logo
-    call draw_header
+    ; Draw taskbar at bottom
+    call draw_taskbar
     
-    ; Row 2: Toolbar with buttons
-    call draw_toolbar
+    ; Draw window frame
+    call draw_window
     
-    ; Row 3: URL bar
-    call draw_urlbar
-    
-    ; Row 4: Separator
-    call draw_h_separator
-    
-    ; Rows 5-22: Content area
-    call draw_content_area
-    
-    ; Row 23: Status bar
-    call draw_statusbar
-    
-    ; Row 24: Bottom decoration
-    call draw_bottom_decoration
+    ; Draw desktop icons
+    call draw_icons
     
     pop edi
     pop esi
@@ -76,381 +115,386 @@ draw_browser_frame:
     pop eax
     ret
 
-; Top decorative border
-draw_top_decoration:
-    mov edi, VIDEO_MEMORY
-    mov cx, 80
-    mov ax, 0x0E2A            ; Yellow asterisk
-    
-.loop:
-    mov word [edi], ax
-    add edi, 2
-    loop .loop
-    ret
-
-; Browser header with logo
-draw_header:
-    mov edi, VIDEO_MEMORY + (1 * VIDEO_WIDTH * 2)
-    
-    ; Left decoration
-    mov ax, 0x0E3E            ; Yellow >
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Spaces
-    mov ax, 0x0F20
-    mov ecx, 3
-.header_space1:
-    mov word [edi], ax
-    add edi, 2
-    loop .header_space1
-    
-    ; Logo text
-    mov esi, header_logo
-    call print_yellow
-    
-    ; Right decoration
-    mov ax, 0x0E3C            ; Yellow <
-    mov word [edi], ax
-    ret
-
-; Toolbar with buttons
-draw_toolbar:
-    mov edi, VIDEO_MEMORY + (2 * VIDEO_WIDTH * 2)
-    
-    ; Left border
-    mov ax, 0x0E5B            ; Yellow [
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Back button
-    mov ax, 0x0F3C            ; White <
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F2D            ; White -
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F20
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Forward button
-    mov ax, 0x0F2D            ; White -
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F3E            ; White >
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F20
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Reload button
-    mov ax, 0x0F4F            ; White O
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F20
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Stop button
-    mov ax, 0x0FX            ; White X
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F20
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Home button
-    mov ax, 0x0FH            ; White H
-    mov word [edi], ax
-    add edi, 2
-    
-    mov ax, 0x0F20
-    mov word [edi], ax
-    add edi, 2
-    
-    ; Right border
-    mov ax, 0x0E5D            ; Yellow ]
-    mov word [edi], ax
-    
-    ret
-
-; URL bar
-draw_urlbar:
-    mov edi, VIDEO_MEMORY + (3 * VIDEO_WIDTH * 2)
-    
-    ; URL bar box
-    mov ax, 0x0E7C            ; Yellow |
-    mov word [edi], ax
-    add edi, 2
-    
-    ; URL text background
-    mov ax, 0x0720            ; Black background, white text
-    mov ecx, 76
-    
-.urlbar_loop:
-    mov word [edi], ax
-    add edi, 2
-    loop .urlbar_loop
-    
-    ; Right border
-    mov ax, 0x0E7C
-    mov word [edi], ax
-    
-    ; Write URL text
-    mov edi, VIDEO_MEMORY + (3 * VIDEO_WIDTH * 2) + 2
-    mov esi, url_text
-    call print_white
-    
-    ret
-
-; Horizontal separator
-draw_h_separator:
-    mov edi, VIDEO_MEMORY + (4 * VIDEO_WIDTH * 2)
-    mov ax, 0x0E3D            ; Yellow =
-    mov ecx, 80
-    
-.sep_loop:
-    mov word [edi], ax
-    add edi, 2
-    loop .sep_loop
-    
-    ret
-
-; Content area (with ASCII art graphics)
-draw_content_area:
-    ; Line 5: Welcome banner
-    mov edi, VIDEO_MEMORY + (5 * VIDEO_WIDTH * 2)
-    mov ax, 0x0E20
-    mov ecx, 80
-.fill_line5:
-    mov word [edi], ax
-    add edi, 2
-    loop .fill_line5
-    
-    ; Line 6: ASCII art scene
-    mov edi, VIDEO_MEMORY + (6 * VIDEO_WIDTH * 2) + 4
-    mov esi, ascii_art_line1
-    call print_cyan
-    
-    ; Line 7
-    mov edi, VIDEO_MEMORY + (7 * VIDEO_WIDTH * 2) + 4
-    mov esi, ascii_art_line2
-    call print_cyan
-    
-    ; Line 8
-    mov edi, VIDEO_MEMORY + (8 * VIDEO_WIDTH * 2) + 4
-    mov esi, ascii_art_line3
-    call print_cyan
-    
-    ; Line 9
-    mov edi, VIDEO_MEMORY + (9 * VIDEO_WIDTH * 2) + 4
-    mov esi, ascii_art_line4
-    call print_cyan
-    
-    ; Line 10: Title
-    mov edi, VIDEO_MEMORY + (10 * VIDEO_WIDTH * 2) + 4
-    mov esi, page_title
-    call print_green
-    
-    ; Line 12: Content text
-    mov edi, VIDEO_MEMORY + (12 * VIDEO_WIDTH * 2) + 4
-    mov esi, content_line1
-    call print_cyan
-    
-    ; Line 13
-    mov edi, VIDEO_MEMORY + (13 * VIDEO_WIDTH * 2) + 4
-    mov esi, content_line2
-    call print_cyan
-    
-    ; Line 14
-    mov edi, VIDEO_MEMORY + (14 * VIDEO_WIDTH * 2) + 4
-    mov esi, content_line3
-    call print_cyan
-    
-    ; Line 15: Divider
-    mov edi, VIDEO_MEMORY + (15 * VIDEO_WIDTH * 2) + 4
-    mov esi, ascii_divider
-    call print_yellow
-    
-    ; Line 17: Features
-    mov edi, VIDEO_MEMORY + (17 * VIDEO_WIDTH * 2) + 4
-    mov esi, feature_header
-    call print_green
-    
-    ; Line 18
-    mov edi, VIDEO_MEMORY + (18 * VIDEO_WIDTH * 2) + 4
-    mov esi, feature_item1
-    call print_cyan
-    
-    ; Line 19
-    mov edi, VIDEO_MEMORY + (19 * VIDEO_WIDTH * 2) + 4
-    mov esi, feature_item2
-    call print_cyan
-    
-    ; Line 20
-    mov edi, VIDEO_MEMORY + (20 * VIDEO_WIDTH * 2) + 4
-    mov esi, feature_item3
-    call print_cyan
-    
-    ; Line 21
-    mov edi, VIDEO_MEMORY + (21 * VIDEO_WIDTH * 2) + 4
-    mov esi, feature_item4
-    call print_cyan
-    
-    ret
-
-; Status bar
-draw_statusbar:
-    mov edi, VIDEO_MEMORY + (23 * VIDEO_WIDTH * 2)
-    mov ax, 0x0E3D            ; Yellow =
-    mov ecx, 80
-    
-.status_sep:
-    mov word [edi], ax
-    add edi, 2
-    loop .status_sep
-    
-    ; Status text
-    mov edi, VIDEO_MEMORY + (23 * VIDEO_WIDTH * 2) + 2
-    mov esi, status_text
-    call print_white
-    
-    ret
-
-; Bottom decorative border
-draw_bottom_decoration:
-    mov edi, VIDEO_MEMORY + (24 * VIDEO_WIDTH * 2)
-    mov ax, 0x0E2A            ; Yellow asterisk
-    mov ecx, 80
-    
-.bottom_loop:
-    mov word [edi], ax
-    add edi, 2
-    loop .bottom_loop
-    
-    ret
-
-; Draw content (main page)
-draw_content:
-    ret
-
-; Print yellow string at EDI
-print_yellow:
+; Fill background with gradient
+fill_background:
     push eax
+    push ebx
     push ecx
+    push edx
+    push edi
     
-.loop:
-    mov al, byte [esi]
-    cmp al, 0
-    je .done
+    mov edi, SCREEN_MEMORY
+    mov ecx, SCREEN_WIDTH * SCREEN_HEIGHT / 4
     
-    mov ah, 0x0E
-    mov word [edi], ax
+.fill_loop:
+    ; Top portion - light blue to dark blue gradient
+    mov eax, 0x02020202      ; Blue pixels
+    mov dword [edi], eax
+    add edi, 4
     
-    add esi, 1
-    add edi, 2
+    cmp edi, SCREEN_MEMORY + (SCREEN_WIDTH * 300)
+    jl .fill_loop
     
-    loop .loop
+    ; Bottom portion - darker blue
+.fill_bottom:
+    mov eax, 0x01010101      ; Darker blue
+    mov dword [edi], eax
+    add edi, 4
     
-.done:
+    cmp edi, SCREEN_MEMORY + (SCREEN_WIDTH * SCREEN_HEIGHT)
+    jl .fill_bottom
+    
+    pop edi
+    pop edx
     pop ecx
+    pop ebx
     pop eax
     ret
 
-; Print white string at EDI
-print_white:
+; Draw taskbar (at bottom)
+draw_taskbar:
     push eax
+    push ebx
+    push ecx
+    push edx
+    push edi
     
-.loop:
-    mov al, byte [esi]
-    cmp al, 0
-    je .done
+    ; Taskbar position: y = 570, height = 30
+    mov edi, SCREEN_MEMORY + (570 * SCREEN_WIDTH)
+    mov ecx, SCREEN_WIDTH * 30
+    mov al, 0x08             ; Gray color
     
-    mov ah, 0x0F
-    mov word [edi], ax
+.taskbar_loop:
+    mov byte [edi], al
+    inc edi
+    loop .taskbar_loop
     
-    add esi, 1
-    add edi, 2
-    jmp .loop
+    ; Draw taskbar border
+    mov edi, SCREEN_MEMORY + (570 * SCREEN_WIDTH)
+    mov al, 0x0F             ; White
+    mov ecx, SCREEN_WIDTH
     
-.done:
+.border_loop:
+    mov byte [edi], al
+    add edi, 1
+    loop .border_loop
+    
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
     pop eax
     ret
 
-; Print cyan string at EDI
-print_cyan:
+; Draw window frame
+draw_window:
     push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
     
-.loop:
-    mov al, byte [esi]
-    cmp al, 0
-    je .done
+    ; Window: x=50, y=50, width=700, height=450
+    mov ebx, 50              ; x start
+    mov ecx, 50              ; y start
+    mov edx, 700             ; width
+    mov esi, 450             ; height
     
-    mov ah, 0x0B
-    mov word [edi], ax
+    call draw_rect_outline
     
-    add esi, 1
-    add edi, 2
-    jmp .loop
+    ; Window title bar
+    mov edi, SCREEN_MEMORY + (50 * SCREEN_WIDTH) + 50
+    mov al, 0x09             ; Light blue
+    mov ecx, 700
     
-.done:
+.title_loop:
+    mov byte [edi], al
+    inc edi
+    loop .title_loop
+    
+    ; Draw title text
+    mov edi, SCREEN_MEMORY + (50 * SCREEN_WIDTH) + 60
+    mov esi, window_title
+    call draw_text_white
+    
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
     pop eax
     ret
 
-; Print green string at EDI
-print_green:
+; Draw rectangle outline
+; EBX=x, ECX=y, EDX=width, ESI=height
+draw_rect_outline:
     push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
     
-.loop:
-    mov al, byte [esi]
-    cmp al, 0
-    je .done
+    mov al, 0x0F             ; White
     
-    mov ah, 0x0A
-    mov word [edi], ax
+    ; Top line
+    mov edi, SCREEN_MEMORY
+    add edi, ecx             ; y offset
+    mov ecx, SCREEN_WIDTH
+    imul ecx, ebx            ; x offset to add
+    add edi, ecx
     
-    add esi, 1
-    add edi, 2
-    jmp .loop
+    mov ecx, edx             ; width
+.top_line:
+    mov byte [edi], al
+    inc edi
+    loop .top_line
     
-.done:
+    ; Bottom line
+    mov edi, SCREEN_MEMORY
+    mov ecx, ebx             ; y = start_y + height
+    add ecx, esi
+    mov eax, SCREEN_WIDTH
+    imul eax, ecx
+    add edi, eax
+    add edi, ebx             ; x offset
+    
+    mov ecx, edx
+.bottom_line:
+    mov byte [edi], al
+    inc edi
+    loop .bottom_line
+    
+    ; Left and right lines
+    mov ecx, esi             ; height
+    
+.vertical_loop:
+    ; Left line
+    mov edi, SCREEN_MEMORY
+    mov eax, ecx
+    add eax, ebx             ; y offset
+    mov edx, SCREEN_WIDTH
+    imul edx, eax
+    add edi, edx
+    add edi, ebx             ; x offset
+    mov byte [edi], al
+    
+    ; Right line
+    mov edi, SCREEN_MEMORY
+    mov edx, SCREEN_WIDTH
+    imul edx, eax
+    add edi, edx
+    add edi, ebx
+    add edi, 700             ; x offset + width
+    mov byte [edi], al
+    
+    loop .vertical_loop
+    
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
     pop eax
     ret
+
+; Draw desktop icons
+draw_icons:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    
+    ; Draw icon at position (20, 20)
+    mov edi, SCREEN_MEMORY + (20 * SCREEN_WIDTH) + 20
+    mov esi, icon_data
+    call draw_icon
+    
+    ; Draw icon at position (120, 20)
+    mov edi, SCREEN_MEMORY + (20 * SCREEN_WIDTH) + 120
+    mov esi, icon_data2
+    call draw_icon
+    
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Draw single icon (16x16)
+draw_icon:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    
+    mov ecx, 16              ; height
+    mov edx, 16              ; width
+    
+.icon_row:
+    mov ebx, edx
+    
+.icon_col:
+    lodsb
+    cmp al, 0x20             ; space = transparent
+    je .icon_skip
+    
+    mov byte [edi], al
+    
+.icon_skip:
+    inc edi
+    dec ebx
+    jnz .icon_col
+    
+    ; Move to next row
+    add edi, (SCREEN_WIDTH - 16)
+    
+    loop .icon_row
+    
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Draw text (white)
+draw_text_white:
+    push eax
+    push ebx
+    push ecx
+    push edi
+    
+    mov al, 0x0F             ; White
+    
+.text_loop:
+    mov bl, byte [esi]
+    cmp bl, 0
+    je .text_done
+    
+    ; Simple character rendering - use character code as pixel pattern
+    mov byte [edi], al
+    inc edi
+    inc esi
+    jmp .text_loop
+    
+.text_done:
+    pop edi
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Main event loop
+main_loop:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    
+    ; Check mouse input
+    call check_mouse
+    
+    ; Check keyboard
+    call check_keyboard
+    
+    jmp main_loop
+    
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Check mouse movement and clicks
+check_mouse:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    
+    ; Read mouse data from port 0x60
+    mov al, 0x60
+    in al, 0x60
+    
+    ; Store mouse position (simplified)
+    ; In real implementation would parse mouse packets
+    
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+; Check keyboard input
+check_keyboard:
+    push eax
+    
+    ; Read from keyboard port
+    in al, 0x60
+    
+    ; ESC key = exit
+    cmp al, 0x01
+    je .exit
+    
+.keyboard_done:
+    pop eax
+    ret
+    
+.exit:
+    jmp kernel_start
 
 ; String data
-header_logo db "MinimalOS Browser 1.0", 0
+window_title db "MinimalOS GUI - 800x600", 0
 
-url_text db "file:///home/minimal/index.html", 0
+; Icon data (simple 16x16 patterns)
+icon_data:
+    db "  0000000000000   "
+    db " 00          0000 "
+    db "00     AAAA     00"
+    db "0     AAAAAA     0"
+    db "0     AAAAAA     0"
+    db "0      AAAA      0"
+    db " 00          0000 "
+    db "  0000000000000   "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
 
-ascii_art_line1 db "       ___         ", 0
-ascii_art_line2 db "      /   \\    ::  ", 0
-ascii_art_line3 db "     | O_O |    |  ", 0
-ascii_art_line4 db "      \\   /    ::  ", 0
-
-page_title db "Welcome to MinimalOS ASCII Browser", 0
-
-content_line1 db "A lightweight text-based web browser running on x86 assembly", 0
-content_line2 db "kernel in protected mode. All graphics rendered with ASCII art.", 0
-content_line3 db "", 0
-
-ascii_divider db "--------------------------------------------", 0
-
-feature_header db "[ Features ]", 0
-
-feature_item1 db "[*] Pure x86-32 Assembly Kernel", 0
-feature_item2 db "[*] ASCII Art Graphics Rendering", 0
-feature_item3 db "[*] Protected Mode Protected Execution", 0
-feature_item4 db "[*] Lightweight & Educational", 0
-
-status_text db "[OK] Page Loaded | Memory: 256MB | CPU: Ready", 0
+icon_data2:
+    db "  1111111111111   "
+    db " 11          1111 "
+    db "11     BBBB     11"
+    db "1     BBBBBB     1"
+    db "1     BBBBBB     1"
+    db "1      BBBB      1"
+    db " 11          1111 "
+    db "  1111111111111   "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
+    db "                  "
 
 ; Global Descriptor Table
 gdt:
@@ -461,5 +505,10 @@ gdt:
 gdt_descriptor:
     dw $ - gdt - 1
     dd gdt
+
+; Mouse state (simplified)
+mouse_x dd 400
+mouse_y dd 300
+mouse_buttons db 0
 
 times 4096 - ($ - $$) db 0
