@@ -1,6 +1,7 @@
-#include <math.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "esp_attr.h"
 #include "esp_clk.h"
@@ -106,6 +107,7 @@ static void run_memory_benchmark(uint32_t core,
                                  volatile uint32_t *buffer)
 {
     volatile uint32_t checksum = 0U;
+    memset((void *)buffer, 0, MEMORY_BUFFER_WORDS * sizeof(buffer[0]));
     const int64_t start_us = esp_timer_get_time();
 
     for (uint32_t i = 0; i < BENCHMARK_ITERATIONS; ++i) {
